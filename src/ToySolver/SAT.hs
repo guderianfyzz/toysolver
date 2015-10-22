@@ -1133,11 +1133,14 @@ solve_ solver = do
     endCPU <- getCPUTime
     endWC  <- getCurrentTime
 
-    when (result == Just True) $ do
-      when (configCheckModel config) $ checkSatisfied solver
-      constructModel solver
-    unless (result == Just False) $ do
-      saveAssumptionsImplications solver
+    case result of
+      Right True -> do
+        when (configCheckModel config) $ checkSatisfied solver
+        constructModel solver
+      _ -> return ()
+    case result of
+      Right False -> return ()
+      _ -> saveAssumptionsImplications solver
 
     backtrackTo solver levelRoot
 
