@@ -391,6 +391,7 @@ data Solver
   , svLearntLim       :: !(IORef Int)
   , svLearntLimAdjCnt :: !(IORef Int)
   , svLearntLimSeq    :: !(IORef [(Int,Int)])
+  , svSeen :: !(Vec.UVec Bool)
 
   -- | Amount to bump next variable with.
   , svVarInc       :: !(IOURef Double)
@@ -709,6 +710,8 @@ newSolverWithConfig config = do
   tsolver <- newIORef Nothing
   tchecked <- newIOURef 0
 
+  seen <- Vec.new
+
   let solver =
         Solver
         { svOk = ok
@@ -754,6 +757,7 @@ newSolverWithConfig config = do
         , svLearntLimSeq    = learntLimSeq
         , svVarInc      = varInc
         , svConstrInc   = constrInc
+        , svSeen = seen
         }
  return solver
 
@@ -775,6 +779,7 @@ instance NewVar IO Solver where
     vd <- newVarData
     Vec.push (svVarData solver) vd
     PQ.enqueue (svVarQueue solver) v
+    Vec.push (svSeen solver) False
     return v
 
   newVars :: Solver -> Int -> IO [Var]
@@ -793,6 +798,7 @@ instance NewVar IO Solver where
 resizeVarCapacity :: Solver -> Int -> IO ()
 resizeVarCapacity solver n = do
   Vec.resizeCapacity (svVarData solver) n
+  Vec.resizeCapacity (svSeen solver) n
   PQ.resizeHeapCapacity (svVarQueue solver) n
   PQ.resizeTableCapacity (svVarQueue solver) (n+1)
 
@@ -1778,50 +1784,54 @@ deduceB solver = loop
 analyzeConflict :: ConstraintHandler c => Solver -> c -> IO (Clause, Level)
 analyzeConflict solver constr = do
   d <- getDecisionLevel solver
+  (out :: Vec.UVec Lit) <- Vec.new
+  Vec.push out 0 -- (leave room for the asserting literal)
+  (pathC :: IOURef Int) <- newIOURef 0
 
-  let split :: [Lit] -> IO (LitSet, LitSet)
-      split = go (IS.empty, IS.empty)
-        where
-          go (xs,ys) [] = return (xs,ys)
-          go (xs,ys) (l:ls) = do
-            lv <- litLevel solver l
-            if lv == levelRoot then
-              go (xs,ys) ls
-            else if lv >= d then
-              go (IS.insert l xs, ys) ls
-            else
-              go (xs, IS.insert l ys) ls
-
-  let loop :: LitSet -> LitSet -> IO LitSet
-      loop lits1 lits2
-        | sz==1 = do
-            return $ lits1 `IS.union` lits2
-        | sz>=2 = do
-            l <- peekTrail solver
-            if litNot l `IS.notMember` lits1 then do
-              popTrail solver
-              loop lits1 lits2
+  let f lits = do
+        forM_ lits $ \lit -> do
+          let !v = litVar lit
+          lv <- litLevel solver lit
+          b <- Vec.unsafeRead (svSeen solver) (v - 1)
+          when (not b && lv > levelRoot) $ do
+            varBumpActivity solver v
+            Vec.unsafeWrite (svSeen solver) (v - 1) True
+            if (lv >= d) then do
+              modifyIOURef pathC (+1)
             else do
-              m <- varReason solver (litVar l)
-              case m of
-                Nothing -> error "analyzeConflict: should not happen"
-                Just constr2 -> do
-                  constrBumpActivity solver constr2
-                  xs <- reasonOf solver constr2 (Just l)
-                  forM_ xs $ \lit -> varBumpActivity solver (litVar lit)
-                  popTrail solver
-                  (ys,zs) <- split xs
-                  loop (IS.delete (litNot l) lits1 `IS.union` ys)
-                       (lits2 `IS.union` zs)
-        | otherwise = error "analyzeConflict: should not happen: reason of current level is empty"
-        where
-          sz = IS.size lits1
+              Vec.push out lit
+
+      popUnseen = do
+        l <- peekTrail solver
+        let !v = litVar l
+        b <- Vec.unsafeRead (svSeen solver) (v - 1)
+        if b then do
+          return ()
+        else do
+          popTrail solver
+          popUnseen
+
+      loop = do
+        popUnseen
+        l <- peekTrail solver
+        let !v = litVar l
+        Vec.write (svSeen solver) (v - 1) False
+        modifyIOURef pathC (subtract 1)
+        c <- readIOURef pathC
+        if c > 0 then do
+          Just constr <- varReason solver v
+          constrBumpActivity solver constr
+          lits <- reasonOf solver constr (Just l)
+          f lits
+          loop
+        else do
+          Vec.unsafeWrite out 0 (litNot l)
 
   constrBumpActivity solver constr
-  conflictClause <- reasonOf solver constr Nothing
-  forM_ conflictClause $ \lit -> varBumpActivity solver (litVar lit)
-  (ys,zs) <- split conflictClause
-  lits <- loop ys zs
+  falsifiedLits <- reasonOf solver constr Nothing
+  f falsifiedLits
+  loop
+  lits <- liftM IS.fromList $ Vec.getElems out
 
   lits2 <- minimizeConflictClause solver lits
 
