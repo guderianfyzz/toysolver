@@ -1795,8 +1795,8 @@ analyzeConflict solver constr = do
           b <- Vec.unsafeRead (svSeen solver) (v - 1)
           when (not b && lv > levelRoot) $ do
             varBumpActivity solver v
-            Vec.unsafeWrite (svSeen solver) (v - 1) True
             if (lv >= d) then do
+              Vec.unsafeWrite (svSeen solver) (v - 1) True
               modifyIOURef pathC (+1)
             else do
               Vec.push out lit
@@ -1815,7 +1815,7 @@ analyzeConflict solver constr = do
         popUnseen
         l <- peekTrail solver
         let !v = litVar l
-        Vec.write (svSeen solver) (v - 1) False
+        Vec.unsafeWrite (svSeen solver) (v - 1) False
         modifyIOURef pathC (subtract 1)
         c <- readIOURef pathC
         if c > 0 then do
@@ -1823,6 +1823,7 @@ analyzeConflict solver constr = do
           constrBumpActivity solver constr
           lits <- reasonOf solver constr (Just l)
           f lits
+          popTrail solver
           loop
         else do
           Vec.unsafeWrite out 0 (litNot l)
