@@ -22,7 +22,7 @@ matrix:
     - env: STACK_YAML=stack-travis.yaml RESOLVER=lts-6.33 GHCVER=7.10.3
       compiler: ": #GHC 7.10.3"
       addons: {apt: {packages: [libgmp-dev,coinor-libcbc0,glpk,lp-solve]}}
-    - env: STACK_YAML=stack-travis.yaml RESOLVER=lts-2.22 GHCVER=7.8.4
+    - env: STACK_YAML=stack-travis-ghc-7.8.yaml RESOLVER=lts-2.22 GHCVER=7.8.4
       compiler: ": #GHC 7.8.4"
       addons: {apt: {packages: [libgmp-dev,coinor-libcbc0,glpk,lp-solve]}}
 
